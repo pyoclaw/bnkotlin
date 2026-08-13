@@ -36,7 +36,7 @@ Kotlin ecosystem. Findings that shaped this plan:
 | JDK | 21 (Temurin LTS) | `docs/15-development.md` requires 21+; Compose desktop needs 17+. |
 | kotlinx.serialization | 1.11.0 | Latest stable. |
 | kotlinx.coroutines | 1.11.0 | Latest stable. |
-| kotlinx-datetime | 0.8.0 | Multiplatform instants. |
+| kotlinx-datetime | 0.6.2 | Multiplatform instants. Pinned: 0.7+ moved Instant/Clock into `kotlin.time` (stdlib) and dropped `Clock.System` + built-in serializers; we migrate once the `kotlin.time` serialization story is clean. |
 | SQLDelight | 2.3.2 | Chosen for local persistence (offline kitchen); pinned, not yet wired. |
 | AGP | (not yet used) | Kotlin 2.4.x supports 8.5.2–9.1.0; exact version chosen when the Android target lands. |
 | Xcode | 26.4 (macOS only) | Required for the iOS target; not available in this Linux workspace. |
