@@ -86,15 +86,12 @@ class PostgresOrderRepository(private val database: Database) : OrderRepository 
 
     private fun queryOrders(sql: String, bind: (java.sql.PreparedStatement) -> Unit): List<Order> {
         database.dataSource.connection.use { conn ->
-            val ids = mutableListOf<String>()
             val rows = mutableListOf<Order>()
             conn.prepareStatement(sql).use { ps ->
                 bind(ps)
                 ps.executeQuery().use { rs ->
                     while (rs.next()) {
-                        val row = rs.toOrderRow()
-                        ids += row.id
-                        rows += row
+                        rows += rs.toOrderRow()
                     }
                 }
             }
