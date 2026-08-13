@@ -1,6 +1,23 @@
 # PLAN — Brød & Fyld Next (RestaurantOS)
 
-Status: Milestone 1 implemented and building (see "First milestone" below).
+Status: Milestone 1 (foundation + shared domain) and the order vertical slice
+(persistence + API) are implemented and building. The customer → kitchen
+realtime loop is the next milestone (Slices 6–7).
+
+## Current state (recovered)
+
+- **Done:** Gradle/KMP foundation, `shared:domain` (order state machine,
+  pricing, order factory), `backend:ktor-api` (health/status/menu/order/kitchen
+  endpoints + WebSocket skeleton), Compose desktop smoke app.
+- **Persistence:** Flyway migrations (`database/migrations`) + a JDBC
+  `PostgresOrderRepository`. Real-Postgres tests are gated on `DATABASE_URL`
+  and run in CI (GitHub Actions with a Postgres service). Locally, without a
+  database, the API falls back to `InMemoryOrderRepository` (dev only) so the
+  build stays green; this fallback is never used in production.
+- **CI:** `.github/workflows/ci.yml` runs `./gradlew build` with PostgreSQL.
+- **Not yet done:** real payment provider, kitchen/customer UI, realtime event
+  stream, offline outbox, notifications, printing, hardening.
+
 This document records architecture findings, toolchain decisions, the
 implementation sequence, risks and open questions. Keep it in sync with code
 and the ADRs; update it whenever a decision materially changes.
@@ -92,7 +109,7 @@ The remaining directories exist as placeholders and are filled by later slices.
 2. **Slice 2 — Domain:** Restaurant, Product, Menu, Cart, Order, state
    machine, pricing, validation (started here; completed with full menu/pricing).
 3. **Slice 3 — Database/API:** PostgreSQL, migrations, repositories, order
-   persistence, DTOs.
+   persistence, DTOs. *(done: migrations, JDBC repository, order + kitchen API)*
 4. **Slice 4 — Customer:** home/menu/product/cart/checkout skeleton.
 5. **Slice 5 — Payments:** provider implementation, signed webhook, idempotency.
 6. **Slice 6 — Kitchen:** queue, actions, ETA, timeline.

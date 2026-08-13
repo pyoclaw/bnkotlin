@@ -3,40 +3,41 @@
 Build in vertical slices rather than completing entire layers independently.
 
 ## Slice 1 — Foundation
-- [ ] Gradle multiplatform structure
-- [ ] Shared domain module
-- [ ] Design-system skeleton
-- [ ] Ktor server
-- [ ] PostgreSQL connection
+- [x] Gradle multiplatform structure
+- [x] Shared domain module
+- [x] Design-system skeleton (Compose desktop smoke app)
+- [x] Ktor server
+- [ ] PostgreSQL connection (migrations + JDBC repository added; see Slice 3)
 - [ ] CI build
 
 ## Slice 2 — Menu
-- [ ] Schema
-- [ ] API
-- [ ] Shared models
+- [x] Shared models
+- [x] Schema (migration tables for categories/products/modifiers)
+- [x] API (sample menu served from `/v1/menu`)
 - [ ] Customer menu UI
-- [ ] Tests
+- [x] Tests (pricing/validation unit tests)
 
 ## Slice 3 — Order
-- [ ] Cart
-- [ ] Order state machine
-- [ ] Persistence
-- [ ] API
+- [x] Cart (models + server-side pricing)
+- [x] Order state machine (central `OrderStateMachine` + tests)
+- [x] Persistence (Flyway migrations + JDBC repository; integration-tested in CI against PostgreSQL)
+- [x] API (order creation, submit, fake pay, status, timeline, kitchen actions)
 - [ ] Checkout UI
 
 ## Slice 4 — Payment
-- [ ] PaymentProvider interface
-- [ ] Provider adapter
+- [x] PaymentProvider interface
+- [x] Fake/test provider (dev only)
+- [ ] Provider adapter (real provider)
 - [ ] Signed webhook
 - [ ] Idempotency
 - [ ] Payment tests
 
 ## Slice 5 — Kitchen
-- [ ] Kitchen API
+- [x] Kitchen API (accept/reject/delay/ready/complete endpoints)
 - [ ] Kitchen UI
-- [ ] Realtime stream
-- [ ] State actions
-- [ ] Audit timeline
+- [ ] Realtime stream (WebSocket skeleton exists; real events in Slice 7)
+- [x] State actions (via shared state machine)
+- [x] Audit timeline (timeline events on every transition)
 
 ## Slice 6 — Offline
 - [ ] Local cache

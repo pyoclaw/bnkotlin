@@ -71,6 +71,7 @@ object OrderStateMachine {
         return Result.success(
             order.copy(
                 state = target,
+                version = order.version + 1,
                 timeline = order.timeline + event,
                 updatedAt = occurredAt,
             )
