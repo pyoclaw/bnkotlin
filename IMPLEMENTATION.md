@@ -7,8 +7,8 @@ Build in vertical slices rather than completing entire layers independently.
 - [x] Shared domain module
 - [x] Design-system skeleton (Compose desktop smoke app)
 - [x] Ktor server
-- [ ] PostgreSQL connection (migrations + JDBC repository added; see Slice 3)
-- [ ] CI build
+- [x] PostgreSQL connection (Flyway migrations + Exposed repository over HikariCP)
+- [x] CI build
 
 ## Slice 2 — Menu
 - [x] Shared models
@@ -20,7 +20,7 @@ Build in vertical slices rather than completing entire layers independently.
 ## Slice 3 — Order
 - [x] Cart (models + server-side pricing)
 - [x] Order state machine (central `OrderStateMachine` + tests)
-- [x] Persistence (Flyway migrations + JDBC repository; integration-tested in CI against PostgreSQL)
+- [x] Persistence (Flyway migrations + Exposed repository with optimistic concurrency and transactional outbox; integration-tested in CI against PostgreSQL)
 - [x] API (order creation, submit, fake pay, status, timeline, kitchen actions)
 - [ ] Checkout UI
 
@@ -35,14 +35,13 @@ Build in vertical slices rather than completing entire layers independently.
 ## Slice 5 — Kitchen
 - [x] Kitchen API (accept/reject/delay/ready/complete endpoints)
 - [ ] Kitchen UI
-- [ ] Realtime stream (WebSocket skeleton exists; real events in Slice 7)
+- [x] Realtime stream (order events broadcast over `/v1/ws/orders`, restaurant-scoped)
 - [x] State actions (via shared state machine)
 - [x] Audit timeline (timeline events on every transition)
 
 ## Slice 6 — Offline
-- [ ] Local cache
-- [ ] Outbox
-- [ ] Reconnect
+- [x] Local cache + client outbox schema (SQLDelight/SQLite in `shared:sync`)
+- [ ] Offline mutation replay (reconnect + idempotent retry)
 - [ ] Event recovery
 - [ ] Conflict tests
 

@@ -2,6 +2,10 @@ package com.brodogfyld.api.orders
 
 import com.brodogfyld.api.dto.CreateOrderRequest
 import com.brodogfyld.api.payment.FakePaymentProvider
+import com.brodogfyld.api.realtime.OrderEvent
+import com.brodogfyld.api.realtime.OrderEventBus
+import com.brodogfyld.api.realtime.eventType
+import com.brodogfyld.api.realtime.toOrderEvent
 import com.brodogfyld.domain.model.Cart
 import com.brodogfyld.domain.model.CartItem
 import com.brodogfyld.domain.model.Currency
@@ -40,6 +44,7 @@ sealed interface CreateOrderResult {
  */
 class OrderService(
     private val repository: OrderRepository,
+    private val eventBus: OrderEventBus,
     private val paymentProvider: PaymentProvider = FakePaymentProvider(),
     private val idGenerator: () -> String = { UUID.randomUUID().toString() },
 ) {
@@ -70,7 +75,18 @@ class OrderService(
                     customerId = request.customerId,
                     createdAt = Clock.System.now(),
                 )
-                CreateOrderResult.Created(repository.save(order))
+                val createdEvent = OrderEvent(
+                    eventId = idGenerator(),
+                    type = order.state.eventType(),
+                    orderId = order.id,
+                    restaurantId = order.restaurantId,
+                    version = order.version,
+                    occurredAt = order.createdAt,
+                    state = order.state,
+                )
+                val saved = repository.create(order, listOf(createdEvent))
+                eventBus.publish(createdEvent)
+                CreateOrderResult.Created(saved)
             }
         }
     }
@@ -108,19 +124,26 @@ class OrderService(
                     is PaymentResult.Failure -> Result.failure(PaymentException(result.reason))
                     is PaymentResult.Success -> {
                         var current = order
+                        val events = mutableListOf<OrderEvent>()
                         current = OrderStateMachine.transition(
                             current, OrderState.PAYMENT_AUTHORIZED, OrderActorType.PAYMENT_PROVIDER,
                             eventId = idGenerator(), actorId = paymentProvider.name, occurredAt = now,
                         ).getOrElse { return Result.failure(it) }
+                        events += current.toOrderEvent()
                         current = OrderStateMachine.transition(
                             current, OrderState.PAID, OrderActorType.PAYMENT_PROVIDER,
                             eventId = idGenerator(), actorId = paymentProvider.name, occurredAt = now,
                         ).getOrElse { return Result.failure(it) }
+                        events += current.toOrderEvent()
                         current = OrderStateMachine.transition(
                             current, OrderState.QUEUED, OrderActorType.SYSTEM,
                             eventId = idGenerator(), occurredAt = now,
                         ).getOrElse { return Result.failure(it) }
-                        Result.success(repository.save(current))
+                        events += current.toOrderEvent()
+                        val saved = persist { repository.update(current, order.version, events) }
+                            .getOrElse { return Result.failure(it) }
+                        events.forEach(eventBus::publish)
+                        Result.success(saved)
                     }
                 }
             }
@@ -158,8 +181,22 @@ class OrderService(
     private suspend fun mutate(orderId: String, action: (Order) -> Result<Order>): Result<Order> {
         val order = repository.findById(orderId) ?: return Result.failure(OrderNotFoundException(orderId))
         return action(order).fold(
-            onSuccess = { repository.save(it).let { saved -> Result.success(saved) } },
+            onSuccess = { mutated ->
+                val event = mutated.toOrderEvent()
+                persist {
+                    val saved = repository.update(mutated, order.version, listOf(event))
+                    eventBus.publish(event)
+                    saved
+                }
+            },
             onFailure = { Result.failure(it) },
         )
+    }
+
+    /** Persists and publishes; maps optimistic-concurrency failures to [Result]. */
+    private suspend fun persist(block: suspend () -> Order): Result<Order> = try {
+        Result.success(block())
+    } catch (e: OrderConcurrencyException) {
+        Result.failure(e)
     }
 }

@@ -8,6 +8,7 @@ import com.brodogfyld.api.orders.InMemoryOrderRepository
 import com.brodogfyld.api.orders.OrderRepository
 import com.brodogfyld.api.orders.OrderService
 import com.brodogfyld.api.orders.PostgresOrderRepository
+import com.brodogfyld.api.realtime.OrderEventBus
 import com.brodogfyld.api.routes.configureHealthRoutes
 import com.brodogfyld.api.routes.configurePublicRoutes
 import com.brodogfyld.api.routes.configureWebSocketRoutes
@@ -48,12 +49,13 @@ fun Application.module(config: AppConfig = AppConfig.fromEnv()) {
         log.warn("DATABASE_URL not set; using in-memory order repository (development only)")
         InMemoryOrderRepository()
     }
-    val orderService = OrderService(repository)
+    val eventBus = OrderEventBus()
+    val orderService = OrderService(repository, eventBus)
     monitor.subscribe(ApplicationStopped) { database?.close() }
 
     configureHealthRoutes()
     configurePublicRoutes(config)
-    configureWebSocketRoutes()
+    configureWebSocketRoutes(eventBus)
     routing {
         orderRoutes(orderService) { restaurantId -> SampleMenu.menu(restaurantId) }
         kitchenRoutes(orderService, config.restaurantId)

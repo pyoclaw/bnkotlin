@@ -8,8 +8,8 @@ RestaurantOS with Brød & Fyld (a Danish sandwich shop) as the first deployment.
 
 - Kotlin Multiplatform + Compose Multiplatform (shared UI)
 - Ktor (API, auth, WebSocket realtime)
-- PostgreSQL (canonical persistence)
-- SQLDelight / SQLite (offline kitchen cache, outbox)
+- Exposed + PostgreSQL (server-side persistence, source of truth)
+- SQLDelight / SQLite (client cache, offline state, outbox)
 - Kotlin Coroutines / Flow, kotlinx.serialization
 
 See `docs/` for the full product, architecture and domain specifications and
@@ -21,7 +21,7 @@ See `docs/` for the full product, architecture and domain specifications and
 shared/
   domain/          models, order state machine, pricing, payments (common code)
   ui/              Compose Multiplatform design system and screens
-  sync/            (planned) realtime client + offline outbox
+  sync/            SQLDelight/SQLite client cache + mutation outbox
   networking/      (planned) Ktor client wrapper
   payments/        (planned) payment provider abstraction
 backend/
@@ -31,7 +31,7 @@ apps/
   customer/        (planned) Android + iOS + web
   kitchen/         (planned) desktop kitchen app
   admin/           (planned) desktop admin app
-database/          (planned) migrations
+database/          PostgreSQL migrations (Flyway)
 deploy/            (planned) deployment config
 docs/              product and architecture specs
 ```
@@ -51,16 +51,28 @@ docs/              product and architecture specs
 
 ## Running the API
 
+Start a local PostgreSQL first:
+
 ```bash
-SERVER_PORT=8080 ./gradlew :backend:ktor-api:run
+docker compose up -d postgres
 ```
+
+Then run the API against it (development defaults match the compose file):
+
+```bash
+DATABASE_URL='jdbc:postgresql://localhost:5432/brodogfyld?user=brodogfyld&password=brodogfyld' \
+  SERVER_PORT=8080 ./gradlew :backend:ktor-api:run
+```
+
+Without `DATABASE_URL` the API falls back to an in-memory order repository
+(development only).
 
 Endpoints:
 
 - `GET /health/live`, `GET /health/ready`
 - `GET /v1/restaurant/status`
 - `GET /v1/menu`
-- `WS /v1/ws/orders`
+- `WS /v1/ws/orders` — realtime order event stream (`?restaurantId=` scopes it)
 
 ## Configuration
 

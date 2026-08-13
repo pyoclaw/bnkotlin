@@ -48,6 +48,7 @@ PATCH /v1/admin/restaurant/settings
 
 ## WebSocket channels
 
-- /v1/ws/orders
-- /v1/ws/kitchen
-- /v1/ws/admin
+- /v1/ws/orders — implemented: streams `order.*` events (see docs/19), scoped
+  with `?restaurantId=` until WS auth lands.
+- /v1/ws/kitchen — planned.
+- /v1/ws/admin — planned.

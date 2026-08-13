@@ -2,6 +2,11 @@ package com.brodogfyld.api.orders
 
 import com.brodogfyld.api.ApiJson
 import com.brodogfyld.api.db.Database
+import com.brodogfyld.api.db.OrderItemsTable
+import com.brodogfyld.api.db.OrderTimelineEventsTable
+import com.brodogfyld.api.db.OrdersTable
+import com.brodogfyld.api.db.OutboxEventsTable
+import com.brodogfyld.api.realtime.OrderEvent
 import com.brodogfyld.domain.model.Currency
 import com.brodogfyld.domain.model.Money
 import com.brodogfyld.domain.order.Order
@@ -11,213 +16,219 @@ import com.brodogfyld.domain.order.OrderState
 import com.brodogfyld.domain.order.OrderTimelineEvent
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.datetime.toJavaInstant
-import kotlinx.datetime.toKotlinInstant
-import kotlinx.serialization.decodeFromString
-import kotlinx.serialization.encodeToString
-import java.sql.Connection
+import kotlinx.datetime.Instant as KInstant
+import kotlinx.serialization.json.encodeToJsonElement
+import org.jetbrains.exposed.v1.core.ResultRow
+import org.jetbrains.exposed.v1.core.SortOrder
+import org.jetbrains.exposed.v1.core.and
+import org.jetbrains.exposed.v1.core.eq
+import org.jetbrains.exposed.v1.core.inList
+import org.jetbrains.exposed.v1.jdbc.deleteWhere
+import org.jetbrains.exposed.v1.jdbc.insert
+import org.jetbrains.exposed.v1.jdbc.selectAll
+import org.jetbrains.exposed.v1.jdbc.transactions.transaction
+import org.jetbrains.exposed.v1.jdbc.update
+import java.time.Instant as JInstant
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
 
 /**
- * PostgreSQL persistence for orders. Canonical source of truth
- * (docs/12-database.md). Optimistic concurrency (the orders.version column) is
- * enforced in the realtime/offline slices (Slice 7/8); for the single-writer
- * milestone the repository does an authoritative full-row sync per save.
+ * PostgreSQL persistence for orders via JetBrains Exposed
+ * (Ktor -> service -> OrderRepository -> Exposed -> PostgreSQL).
+ *
+ * Concurrency: [update] applies an optimistic, version-checked write inside a
+ * single transaction; a stale write raises [OrderConcurrencyException] and the
+ * whole transaction rolls back. The order row, item snapshots, audit timeline
+ * and outbox rows commit atomically, so realtime events can never represent
+ * uncommitted state (docs/12-database.md, docs/07-sync-engine.md).
  */
 class PostgresOrderRepository(private val database: Database) : OrderRepository {
 
-    override suspend fun save(order: Order): Order = withContext(Dispatchers.IO) {
-        database.dataSource.connection.use { conn ->
-            conn.autoCommit = false
-            try {
-                upsertOrder(conn, order)
-                conn.prepareStatement("DELETE FROM order_items WHERE order_id = ?").use { ps ->
-                    ps.setString(1, order.id)
-                    ps.executeUpdate()
-                }
-                conn.prepareStatement("DELETE FROM order_timeline_events WHERE order_id = ?").use { ps ->
-                    ps.setString(1, order.id)
-                    ps.executeUpdate()
-                }
-                order.items.forEach { insertItem(conn, order.id, it) }
-                order.timeline.forEach { insertTimelineEvent(conn, order.id, it) }
-                conn.commit()
-            } catch (e: Exception) {
-                conn.rollback()
-                throw e
-            }
+    override suspend fun create(order: Order, events: List<OrderEvent>): Order = withContext(Dispatchers.IO) {
+        transaction(database.exposed) {
+            insertOrder(order)
+            order.items.forEach { insertItem(order.id, it) }
+            order.timeline.forEach { insertTimelineEvent(order.id, it) }
+            events.forEach { insertOutboxEvent(it) }
         }
         order
     }
 
+    override suspend fun update(order: Order, expectedVersion: Long, events: List<OrderEvent>): Order =
+        withContext(Dispatchers.IO) {
+            transaction(database.exposed) {
+                val updated = OrdersTable.update({
+                    (OrdersTable.id eq order.id) and (OrdersTable.version eq expectedVersion)
+                }) { row ->
+                    row[customerId] = order.customerId
+                    row[currency] = order.currency.code
+                    row[totalMinor] = order.total.amountMinor
+                    row[state] = order.state.name
+                    row[version] = order.version
+                    row[updatedAt] = order.updatedAt.toOffsetDateTime()
+                }
+                if (updated == 0) {
+                    val current = OrdersTable.selectAll()
+                        .where { OrdersTable.id eq order.id }
+                        .singleOrNull()
+                    val actual = current?.get(OrdersTable.version)
+                        ?: throw OrderNotFoundException(order.id)
+                    throw OrderConcurrencyException(order.id, expectedVersion, actual)
+                }
+                replaceChildren(order)
+                events.forEach { insertOutboxEvent(it) }
+            }
+            order
+        }
+
     override suspend fun findById(id: String): Order? = withContext(Dispatchers.IO) {
-        database.dataSource.connection.use { conn ->
-            val row = conn.prepareStatement(
-                "SELECT id, restaurant_id, customer_id, currency, total_minor, state, version, created_at, updated_at " +
-                    "FROM orders WHERE id = ?"
-            ).use { ps ->
-                ps.setString(1, id)
-                ps.executeQuery().use { rs -> if (rs.next()) rs.toOrderRow() else null }
-            } ?: return@withContext null
-            row.copy(items = loadItems(conn, id), timeline = loadTimeline(conn, id))
+        transaction(database.exposed) {
+            val row = OrdersTable.selectAll().where { OrdersTable.id eq id }.singleOrNull()
+                ?: return@transaction null
+            row.toOrder().copy(items = loadItems(id), timeline = loadTimeline(id))
         }
     }
 
     override suspend fun findByRestaurant(restaurantId: String): List<Order> = withContext(Dispatchers.IO) {
-        queryOrders(
-            "SELECT id, restaurant_id, customer_id, currency, total_minor, state, version, created_at, updated_at " +
-                "FROM orders WHERE restaurant_id = ? ORDER BY created_at DESC",
-            { it.setString(1, restaurantId) },
-        )
+        transaction(database.exposed) {
+            OrdersTable.selectAll()
+                .where { OrdersTable.restaurantId eq restaurantId }
+                .orderBy(OrdersTable.createdAt, SortOrder.DESC)
+                .map { it.toOrder().withChildren() }
+        }
     }
 
     override suspend fun findByRestaurantAndStates(restaurantId: String, states: Set<OrderState>): List<Order> =
         withContext(Dispatchers.IO) {
-            queryOrders(
-                "SELECT id, restaurant_id, customer_id, currency, total_minor, state, version, created_at, updated_at " +
-                    "FROM orders WHERE restaurant_id = ? AND state = ANY(?) ORDER BY created_at DESC",
-                { ps ->
-                    ps.setString(1, restaurantId)
-                    ps.setArray(2, ps.connection.createArrayOf("text", states.map { it.name }.toTypedArray()))
-                },
-            )
-        }
-
-    private fun queryOrders(sql: String, bind: (java.sql.PreparedStatement) -> Unit): List<Order> {
-        database.dataSource.connection.use { conn ->
-            val rows = mutableListOf<Order>()
-            conn.prepareStatement(sql).use { ps ->
-                bind(ps)
-                ps.executeQuery().use { rs ->
-                    while (rs.next()) {
-                        rows += rs.toOrderRow()
+            transaction(database.exposed) {
+                OrdersTable.selectAll()
+                    .where {
+                        (OrdersTable.restaurantId eq restaurantId) and
+                            (OrdersTable.state inList states.map { it.name })
                     }
-                }
-            }
-            return rows.map { row -> row.copy(items = loadItems(conn, row.id), timeline = loadTimeline(conn, row.id)) }
-        }
-    }
-
-    private fun upsertOrder(conn: Connection, order: Order) {
-        conn.prepareStatement(
-            "INSERT INTO orders (id, restaurant_id, customer_id, currency, total_minor, state, version, created_at, updated_at) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) " +
-                "ON CONFLICT (id) DO UPDATE SET " +
-                "customer_id = EXCLUDED.customer_id, currency = EXCLUDED.currency, total_minor = EXCLUDED.total_minor, " +
-                "state = EXCLUDED.state, version = EXCLUDED.version, updated_at = EXCLUDED.updated_at"
-        ).use { ps ->
-            ps.setString(1, order.id)
-            ps.setString(2, order.restaurantId)
-            ps.setString(3, order.customerId)
-            ps.setString(4, order.currency.code)
-            ps.setLong(5, order.total.amountMinor)
-            ps.setString(6, order.state.name)
-            ps.setLong(7, order.version)
-            ps.setObject(8, order.createdAt.toJavaInstant().atOffset(ZoneOffset.UTC))
-            ps.setObject(9, order.updatedAt.toJavaInstant().atOffset(ZoneOffset.UTC))
-            ps.executeUpdate()
-        }
-    }
-
-    private fun insertItem(conn: Connection, orderId: String, item: OrderItem) {
-        conn.prepareStatement(
-            "INSERT INTO order_items (id, order_id, product_id, name, unit_price_minor, quantity, line_total_minor, modifier_names) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb))"
-        ).use { ps ->
-            ps.setString(1, item.id)
-            ps.setString(2, orderId)
-            ps.setString(3, item.productId)
-            ps.setString(4, item.name)
-            ps.setLong(5, item.unitPrice.amountMinor)
-            ps.setInt(6, item.quantity)
-            ps.setLong(7, item.lineTotal.amountMinor)
-            ps.setString(8, ApiJson.encodeToString(item.modifierNames))
-            ps.executeUpdate()
-        }
-    }
-
-    private fun insertTimelineEvent(conn: Connection, orderId: String, event: OrderTimelineEvent) {
-        conn.prepareStatement(
-            "INSERT INTO order_timeline_events " +
-                "(order_id, event_id, occurred_at, actor_type, actor_id, previous_state, new_state, reason_code, metadata) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb))"
-        ).use { ps ->
-            ps.setString(1, orderId)
-            ps.setString(2, event.eventId)
-            ps.setObject(3, event.occurredAt.toJavaInstant().atOffset(ZoneOffset.UTC))
-            ps.setString(4, event.actorType.name)
-            ps.setString(5, event.actorId)
-            ps.setString(6, event.previousState.name)
-            ps.setString(7, event.newState.name)
-            ps.setString(8, event.reasonCode)
-            ps.setString(9, ApiJson.encodeToString(event.metadata))
-            ps.executeUpdate()
-        }
-    }
-
-    private fun loadItems(conn: Connection, orderId: String): List<OrderItem> {
-        return conn.prepareStatement(
-            "SELECT id, product_id, name, unit_price_minor, quantity, line_total_minor, modifier_names " +
-                "FROM order_items WHERE order_id = ? ORDER BY id"
-        ).use { ps ->
-            ps.setString(1, orderId)
-            ps.executeQuery().use { rs ->
-                buildList {
-                    while (rs.next()) {
-                        add(
-                            OrderItem(
-                                id = rs.getString("id"),
-                                productId = rs.getString("product_id"),
-                                name = rs.getString("name"),
-                                unitPrice = Money(rs.getLong("unit_price_minor")),
-                                quantity = rs.getInt("quantity"),
-                                modifierNames = ApiJson.decodeFromString(rs.getString("modifier_names")),
-                                lineTotal = Money(rs.getLong("line_total_minor")),
-                            )
-                        )
-                    }
-                }
+                    .orderBy(OrdersTable.createdAt, SortOrder.DESC)
+                    .map { it.toOrder().withChildren() }
             }
         }
-    }
 
-    private fun loadTimeline(conn: Connection, orderId: String): List<OrderTimelineEvent> {
-        return conn.prepareStatement(
-            "SELECT event_id, occurred_at, actor_type, actor_id, previous_state, new_state, reason_code, metadata " +
-                "FROM order_timeline_events WHERE order_id = ? ORDER BY id"
-        ).use { ps ->
-            ps.setString(1, orderId)
-            ps.executeQuery().use { rs ->
-                buildList {
-                    while (rs.next()) {
-                        add(
-                            OrderTimelineEvent(
-                                eventId = rs.getString("event_id"),
-                                occurredAt = rs.getObject("occurred_at", OffsetDateTime::class.java).toInstant().toKotlinInstant(),
-                                actorType = OrderActorType.valueOf(rs.getString("actor_type")),
-                                actorId = rs.getString("actor_id"),
-                                previousState = OrderState.valueOf(rs.getString("previous_state")),
-                                newState = OrderState.valueOf(rs.getString("new_state")),
-                                reasonCode = rs.getString("reason_code"),
-                                metadata = ApiJson.decodeFromString(rs.getString("metadata")),
-                            )
-                        )
-                    }
-                }
-            }
+    // --- writes -----------------------------------------------------------------
+
+    private fun insertOrder(order: Order) {
+        OrdersTable.insert { row ->
+            row[id] = order.id
+            row[restaurantId] = order.restaurantId
+            row[customerId] = order.customerId
+            row[currency] = order.currency.code
+            row[totalMinor] = order.total.amountMinor
+            row[state] = order.state.name
+            row[version] = order.version
+            row[createdAt] = order.createdAt.toOffsetDateTime()
+            row[updatedAt] = order.updatedAt.toOffsetDateTime()
         }
     }
 
-    private fun java.sql.ResultSet.toOrderRow(): Order = Order(
-        id = getString("id"),
-        restaurantId = getString("restaurant_id"),
-        total = Money(getLong("total_minor")),
-        createdAt = getObject("created_at", OffsetDateTime::class.java).toInstant().toKotlinInstant(),
-        updatedAt = getObject("updated_at", OffsetDateTime::class.java).toInstant().toKotlinInstant(),
-        currency = Currency.entries.firstOrNull { it.code == getString("currency") } ?: Currency.DKK,
-        state = OrderState.valueOf(getString("state")),
-        customerId = getString("customer_id"),
-        version = getLong("version"),
+    /** Deletes and re-inserts child rows (idempotent full-row sync). */
+    private fun replaceChildren(order: Order) {
+        OrderItemsTable.deleteWhere { OrderItemsTable.orderId eq order.id }
+        OrderTimelineEventsTable.deleteWhere { OrderTimelineEventsTable.orderId eq order.id }
+        order.items.forEach { insertItem(order.id, it) }
+        order.timeline.forEach { insertTimelineEvent(order.id, it) }
+    }
+
+    private fun insertItem(orderId: String, item: OrderItem) {
+        OrderItemsTable.insert { row ->
+            row[id] = item.id
+            row[OrderItemsTable.orderId] = orderId
+            row[productId] = item.productId
+            row[name] = item.name
+            row[unitPriceMinor] = item.unitPrice.amountMinor
+            row[quantity] = item.quantity
+            row[lineTotalMinor] = item.lineTotal.amountMinor
+            row[modifierNames] = item.modifierNames
+        }
+    }
+
+    private fun insertTimelineEvent(orderId: String, event: OrderTimelineEvent) {
+        OrderTimelineEventsTable.insert { row ->
+            row[OrderTimelineEventsTable.orderId] = orderId
+            row[eventId] = event.eventId
+            row[occurredAt] = event.occurredAt.toOffsetDateTime()
+            row[actorType] = event.actorType.name
+            row[actorId] = event.actorId
+            row[previousState] = event.previousState.name
+            row[newState] = event.newState.name
+            row[reasonCode] = event.reasonCode
+            row[metadata] = event.metadata
+        }
+    }
+
+    private fun insertOutboxEvent(event: OrderEvent) {
+        OutboxEventsTable.insert { row ->
+            row[eventId] = event.eventId
+            row[aggregateType] = "order"
+            row[aggregateId] = event.orderId
+            row[eventType] = event.type
+            row[aggregateVersion] = event.version
+            row[payload] = ApiJson.encodeToJsonElement(event.toEnvelope())
+            row[createdAt] = event.occurredAt.toOffsetDateTime()
+        }
+    }
+
+    // --- reads -----------------------------------------------------------------
+
+    private fun ResultRow.toOrder(): Order = Order(
+        id = get(OrdersTable.id),
+        restaurantId = get(OrdersTable.restaurantId),
+        total = Money(get(OrdersTable.totalMinor)),
+        createdAt = get(OrdersTable.createdAt).toKInstant(),
+        updatedAt = get(OrdersTable.updatedAt).toKInstant(),
+        currency = Currency.entries.firstOrNull { it.code == get(OrdersTable.currency) } ?: Currency.DKK,
+        state = OrderState.valueOf(get(OrdersTable.state)),
+        customerId = get(OrdersTable.customerId),
+        version = get(OrdersTable.version),
     )
+
+    private fun Order.withChildren(): Order = copy(items = loadItems(id), timeline = loadTimeline(id))
+
+    private fun loadItems(orderId: String): List<OrderItem> =
+        OrderItemsTable.selectAll()
+            .where { OrderItemsTable.orderId eq orderId }
+            .orderBy(OrderItemsTable.id)
+            .map { row ->
+                OrderItem(
+                    id = row[OrderItemsTable.id],
+                    productId = row[OrderItemsTable.productId],
+                    name = row[OrderItemsTable.name],
+                    unitPrice = Money(row[OrderItemsTable.unitPriceMinor]),
+                    quantity = row[OrderItemsTable.quantity],
+                    modifierNames = row[OrderItemsTable.modifierNames],
+                    lineTotal = Money(row[OrderItemsTable.lineTotalMinor]),
+                )
+            }
+
+    private fun loadTimeline(orderId: String): List<OrderTimelineEvent> =
+        OrderTimelineEventsTable.selectAll()
+            .where { OrderTimelineEventsTable.orderId eq orderId }
+            .orderBy(OrderTimelineEventsTable.id)
+            .map { row ->
+                OrderTimelineEvent(
+                    eventId = row[OrderTimelineEventsTable.eventId],
+                    occurredAt = row[OrderTimelineEventsTable.occurredAt].toKInstant(),
+                    actorType = OrderActorType.valueOf(row[OrderTimelineEventsTable.actorType]),
+                    actorId = row[OrderTimelineEventsTable.actorId],
+                    previousState = OrderState.valueOf(row[OrderTimelineEventsTable.previousState]),
+                    newState = OrderState.valueOf(row[OrderTimelineEventsTable.newState]),
+                    reasonCode = row[OrderTimelineEventsTable.reasonCode],
+                    metadata = row[OrderTimelineEventsTable.metadata],
+                )
+            }
+
+    // kotlinx-datetime 0.6.2 <-> java.time, without relying on the internal
+    // toJavaInstant/toKotlinInstant helpers (which Exposed's transitive
+    // kotlinx-datetime compat artifact marks internal).
+    private fun KInstant.toOffsetDateTime(): OffsetDateTime =
+        JInstant.ofEpochSecond(epochSeconds, nanosecondsOfSecond.toLong()).atOffset(ZoneOffset.UTC)
+
+    private fun OffsetDateTime.toKInstant(): KInstant =
+        KInstant.fromEpochSeconds(toEpochSecond(), nano)
 }
