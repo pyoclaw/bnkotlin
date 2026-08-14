@@ -21,14 +21,14 @@ fun Route.kitchenRoutes(service: OrderService, defaultRestaurantId: String) {
         }
         post("/{id}/accept") {
             val request = call.receiveNullable<KitchenActionRequest>() ?: KitchenActionRequest()
-            call.respondOrderResult(service.accept(call.parameters["id"]!!, request.actorId))
+            call.respondOrderResult(service.accept(call.parameters["id"]!!, request.actorId, request.mutationId))
         }
         post("/{id}/reject") {
             val request = call.receiveNullable<KitchenActionRequest>() ?: KitchenActionRequest()
             if (request.reasonCode.isNullOrBlank()) {
                 call.respond(HttpStatusCode.BadRequest, ErrorResponse("reason_required"))
             } else {
-                call.respondOrderResult(service.reject(call.parameters["id"]!!, request.actorId, request.reasonCode))
+                call.respondOrderResult(service.reject(call.parameters["id"]!!, request.actorId, request.reasonCode, request.mutationId))
             }
         }
         post("/{id}/delay") {
@@ -37,16 +37,16 @@ fun Route.kitchenRoutes(service: OrderService, defaultRestaurantId: String) {
             if (eta == null) {
                 call.respond(HttpStatusCode.BadRequest, ErrorResponse("invalid_eta"))
             } else {
-                call.respondOrderResult(service.delay(call.parameters["id"]!!, request.actorId, eta))
+                call.respondOrderResult(service.delay(call.parameters["id"]!!, request.actorId, eta, request.mutationId))
             }
         }
         post("/{id}/ready") {
             val request = call.receiveNullable<KitchenActionRequest>() ?: KitchenActionRequest()
-            call.respondOrderResult(service.ready(call.parameters["id"]!!, request.actorId))
+            call.respondOrderResult(service.ready(call.parameters["id"]!!, request.actorId, request.mutationId))
         }
         post("/{id}/complete") {
             val request = call.receiveNullable<KitchenActionRequest>() ?: KitchenActionRequest()
-            call.respondOrderResult(service.complete(call.parameters["id"]!!, request.actorId))
+            call.respondOrderResult(service.complete(call.parameters["id"]!!, request.actorId, request.mutationId))
         }
     }
 }

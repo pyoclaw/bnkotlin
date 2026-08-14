@@ -29,5 +29,6 @@ dependencyResolutionManagement {
 
 include(":shared:domain")
 include(":shared:sync")
+include(":shared:networking")
 include(":shared:ui")
 include(":backend:ktor-api")

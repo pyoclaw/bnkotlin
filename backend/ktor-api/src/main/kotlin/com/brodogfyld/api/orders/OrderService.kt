@@ -158,24 +158,50 @@ class OrderService(
         }
     }
 
-    suspend fun accept(orderId: String, actorId: String?): Result<Order> = mutate(orderId) { order ->
-        OrderStateMachine.accept(order, actorId ?: "unknown", eventId = idGenerator())
-    }
+    suspend fun accept(orderId: String, actorId: String?, mutationId: String? = null): Result<Order> =
+        kitchenMutate(orderId, mutationId) { order ->
+            OrderStateMachine.accept(order, actorId ?: "unknown", eventId = mutationId ?: idGenerator())
+        }
 
-    suspend fun reject(orderId: String, actorId: String?, reasonCode: String?): Result<Order> = mutate(orderId) { order ->
-        OrderStateMachine.reject(order, actorId ?: "unknown", reasonCode ?: "", eventId = idGenerator())
-    }
+    suspend fun reject(orderId: String, actorId: String?, reasonCode: String?, mutationId: String? = null): Result<Order> =
+        kitchenMutate(orderId, mutationId) { order ->
+            OrderStateMachine.reject(order, actorId ?: "unknown", reasonCode ?: "", eventId = mutationId ?: idGenerator())
+        }
 
-    suspend fun delay(orderId: String, actorId: String?, newEta: Instant): Result<Order> = mutate(orderId) { order ->
-        OrderStateMachine.delay(order, actorId ?: "unknown", newEta, eventId = idGenerator())
-    }
+    suspend fun delay(orderId: String, actorId: String?, newEta: Instant, mutationId: String? = null): Result<Order> =
+        kitchenMutate(orderId, mutationId) { order ->
+            OrderStateMachine.delay(order, actorId ?: "unknown", newEta, eventId = mutationId ?: idGenerator())
+        }
 
-    suspend fun ready(orderId: String, actorId: String?): Result<Order> = mutate(orderId) { order ->
-        OrderStateMachine.ready(order, actorId ?: "unknown", eventId = idGenerator())
-    }
+    suspend fun ready(orderId: String, actorId: String?, mutationId: String? = null): Result<Order> =
+        kitchenMutate(orderId, mutationId) { order ->
+            OrderStateMachine.ready(order, actorId ?: "unknown", eventId = mutationId ?: idGenerator())
+        }
 
-    suspend fun complete(orderId: String, actorId: String?): Result<Order> = mutate(orderId) { order ->
-        OrderStateMachine.complete(order, actorId ?: "unknown", eventId = idGenerator())
+    suspend fun complete(orderId: String, actorId: String?, mutationId: String? = null): Result<Order> =
+        kitchenMutate(orderId, mutationId) { order ->
+            OrderStateMachine.complete(order, actorId ?: "unknown", eventId = mutationId ?: idGenerator())
+        }
+
+    /**
+     * Applies a kitchen mutation idempotently. [mutationId] is used as the
+     * timeline event id, so a client that replays its offline outbox with the
+     * same id is recognized: the transition is not re-applied and the current
+     * order is returned instead (docs/07-sync-engine.md). Mutation ids must be
+     * globally unique because they double as timeline event ids.
+     */
+    private suspend fun kitchenMutate(
+        orderId: String,
+        mutationId: String?,
+        action: (Order) -> Result<Order>,
+    ): Result<Order> {
+        if (mutationId != null) {
+            val current = repository.findById(orderId) ?: return Result.failure(OrderNotFoundException(orderId))
+            if (current.timeline.any { it.eventId == mutationId }) {
+                return Result.success(current)
+            }
+        }
+        return mutate(orderId, action)
     }
 
     private suspend fun mutate(orderId: String, action: (Order) -> Result<Order>): Result<Order> {

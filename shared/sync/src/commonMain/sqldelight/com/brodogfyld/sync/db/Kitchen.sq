@@ -14,7 +14,10 @@ CREATE TABLE cached_order (
 );
 
 CREATE TABLE local_outbox (
-    id TEXT NOT NULL PRIMARY KEY,
+    -- AUTOINCREMENT gives a strict, non-reused insertion sequence so the
+    -- outbox replays in FIFO order even when created_at timestamps tie.
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
     mutation_type TEXT NOT NULL,
     order_id TEXT NOT NULL,
     payload TEXT NOT NULL,
@@ -39,7 +42,7 @@ INSERT INTO local_outbox (id, mutation_type, order_id, payload, created_at)
 VALUES (?, ?, ?, ?, ?);
 
 selectOutbox:
-SELECT * FROM local_outbox ORDER BY created_at;
+SELECT * FROM local_outbox ORDER BY seq;
 
 deleteOutbox:
 DELETE FROM local_outbox WHERE id = ?;

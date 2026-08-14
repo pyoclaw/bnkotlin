@@ -117,4 +117,47 @@ class OrderFlowTest {
         }
         assertEquals(HttpStatusCode.Conflict, complete.status)
     }
+
+    @Test
+    fun replayedKitchenMutationIsIdempotent() = testApplication {
+        application { module(testConfig()) }
+        val client = jsonClient()
+
+        val created = client.post("/v1/orders") {
+            contentType(ContentType.Application.Json)
+            setBody(
+                CreateOrderRequest(
+                    restaurantId = "test-restaurant",
+                    items = listOf(OrderItemRequest(productId = "smorrebrod-okse", quantity = 1, modifierOptionIds = setOf("bread-rye"))),
+                )
+            )
+        }
+        val draft: OrderResponse = created.body()
+        client.post("/v1/orders/${draft.id}/submit")
+        val queued: OrderResponse = client.post("/v1/orders/${draft.id}/pay").body()
+        assertEquals("QUEUED", queued.state)
+        val queuedVersion = queued.version
+
+        val accepted = client.post("/v1/kitchen/orders/${draft.id}/accept") {
+            contentType(ContentType.Application.Json)
+            setBody(KitchenActionRequest(actorId = "staff-1", mutationId = "mutation-1"))
+        }
+        assertEquals(HttpStatusCode.OK, accepted.status)
+        assertEquals("ACCEPTED", accepted.body<OrderResponse>().state)
+        assertEquals(queuedVersion + 1, accepted.body<OrderResponse>().version)
+
+        // Replaying the same offline mutation must succeed as a no-op, not fail
+        // the state machine (ACCEPTED -> ACCEPTED is otherwise illegal).
+        val replay = client.post("/v1/kitchen/orders/${draft.id}/accept") {
+            contentType(ContentType.Application.Json)
+            setBody(KitchenActionRequest(actorId = "staff-1", mutationId = "mutation-1"))
+        }
+        assertEquals(HttpStatusCode.OK, replay.status)
+        assertEquals("ACCEPTED", replay.body<OrderResponse>().state)
+        assertEquals(queuedVersion + 1, replay.body<OrderResponse>().version)
+
+        // The audit timeline must not contain a duplicate event.
+        val timeline: List<TimelineEventResponse> = client.get("/v1/orders/${draft.id}/timeline").body()
+        assertEquals(1, timeline.count { it.eventId == "mutation-1" })
+    }
 }

@@ -41,9 +41,11 @@ Build in vertical slices rather than completing entire layers independently.
 
 ## Slice 6 — Offline
 - [x] Local cache + client outbox schema (SQLDelight/SQLite in `shared:sync`)
-- [ ] Offline mutation replay (reconnect + idempotent retry)
-- [ ] Event recovery
-- [ ] Conflict tests
+- [x] Offline mutation replay (reconnect + idempotent retry, FIFO via `local_outbox.seq`)
+- [x] Event recovery (dedupe by version, gap-triggered resync, full kitchen recovery)
+- [x] Conflict tests (stale drop + reconcile, superseded mutations, idempotent retry)
+- [x] Server idempotency (mutation id doubles as the timeline event id; replayed mutations are no-ops)
+- [x] Real Ktor HTTP transport in `shared:networking` (`KtorSyncTransport` implements `SyncTransport`; WebSocket event ingestion lands with the kitchen UI)
 
 ## Slice 7 — Notifications / Printing
 - [ ] Push

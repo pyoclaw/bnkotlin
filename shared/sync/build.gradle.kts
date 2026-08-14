@@ -1,5 +1,6 @@
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
+    alias(libs.plugins.kotlinSerialization)
     alias(libs.plugins.sqldelight)
 }
 
@@ -13,8 +14,11 @@ kotlin {
 
     sourceSets {
         commonMain.dependencies {
+            implementation(project(":shared:domain"))
             implementation(libs.sqldelight.runtime)
             implementation(libs.sqldelight.coroutines)
+            implementation(libs.kotlinx.serialization.json)
+            implementation(libs.kotlinx.datetime)
         }
         jvmMain.dependencies {
             implementation(libs.sqldelight.sqlite.driver)
@@ -24,6 +28,7 @@ kotlin {
         }
         jvmTest.dependencies {
             implementation(libs.sqldelight.sqlite.driver)
+            implementation(libs.kotlinx.coroutines.core)
         }
     }
 }

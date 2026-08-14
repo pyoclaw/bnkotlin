@@ -61,6 +61,8 @@ data class KitchenActionRequest(
     val actorId: String? = null,
     val reasonCode: String? = null,
     val newEta: String? = null,
+    /** Client idempotency key; doubles as the timeline event id on the server. */
+    val mutationId: String? = null,
 )
 
 @Serializable

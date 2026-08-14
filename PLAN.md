@@ -4,7 +4,7 @@ Status: Milestone 1 (foundation + shared domain), the order vertical slice,
 the realtime event broadcast and the canonical persistence architecture
 (Ktor + Exposed + PostgreSQL on the server; SQLDelight + SQLite on clients)
 are implemented and building. Next up: the kitchen/customer UI and the
-client-side sync/recovery loop (Slices 4, 6–8).
+WebSocket client event stream (Slices 4, 7).
 
 ## Current state (recovered)
 
@@ -14,23 +14,29 @@ client-side sync/recovery loop (Slices 4, 6–8).
   app.
 - **Realtime:** `backend` fans out order events over `/v1/ws/orders`
   (restaurant-scoped via `?restaurantId=`); events reuse the timeline event id
-  and are published only after commit. WS auth, explicit subscribe, and client
-  reconnect/recovery remain pending (Slice 7/8).
+  and are published only after commit. WS auth and explicit subscribe remain
+  pending; the client-side replay/recovery engine is done (Slice 6).
 - **Persistence:** Flyway migrations (`database/migrations`) + an **Exposed**
   `PostgresOrderRepository` over HikariCP. Order mutations are version-checked
   (optimistic concurrency → `409 concurrent_modification`) and write
   `outbox_events` rows in the same transaction as the order change.
 - **Clients:** `shared:sync` wires **SQLDelight + SQLite** (kitchen cache +
-  local mutation outbox) with a JVM driver and smoke tests.
+  local mutation outbox) and a transport-agnostic `OrderSyncEngine` that
+  applies kitchen actions optimistically, replays the outbox in FIFO order
+  with idempotent retries, deduplicates realtime events, and resyncs from the
+  server. Server-side kitchen mutations are idempotent (mutation id = timeline
+  event id). The real HTTP transport (`KtorSyncTransport`) and the
+  `SyncCoordinator` reconnect loop live in `shared:networking`; WebSocket event
+  ingestion lands with the kitchen UI (Slice 7).
 - **Tests:** Real-Postgres tests are gated on `DATABASE_URL` and run in CI
   (GitHub Actions with a Postgres service); `docker-compose.yml` provides a
   local Postgres. Without a database, the API falls back to
   `InMemoryOrderRepository` (dev only) so the build stays green; this fallback
   is never used in production.
 - **CI:** `.github/workflows/ci.yml` runs `./gradlew build` with PostgreSQL.
-- **Not yet done:** real payment provider, kitchen/customer UI, client-side
-  sync/reconnect/recovery, durable outbox worker/retry, notifications,
-  printing, hardening.
+- **Not yet done:** real payment provider, kitchen/customer UI, WS auth +
+  client event subscription, durable server-side outbox worker/retry,
+  notifications, printing, hardening.
 
 This document records architecture findings, toolchain decisions, the
 implementation sequence, risks and open questions. Keep it in sync with code
