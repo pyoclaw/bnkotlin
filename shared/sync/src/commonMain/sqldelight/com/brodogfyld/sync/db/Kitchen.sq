@@ -1,0 +1,48 @@
+-- Kitchen client local cache + mutation outbox (SQLite, SQLDelight).
+-- This is NOT the authoritative schema: PostgreSQL is the source of truth.
+-- The cache holds only what the kitchen screen needs to render and the outbox
+-- holds pending mutations to replay when connectivity returns
+-- (docs/07-sync-engine.md, docs/12-database.md).
+
+CREATE TABLE cached_order (
+    id TEXT NOT NULL PRIMARY KEY,
+    restaurant_id TEXT NOT NULL,
+    state TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    total_minor INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE local_outbox (
+    -- AUTOINCREMENT gives a strict, non-reused insertion sequence so the
+    -- outbox replays in FIFO order even when created_at timestamps tie.
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
+    mutation_type TEXT NOT NULL,
+    order_id TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+selectOrder:
+SELECT * FROM cached_order WHERE id = ?;
+
+selectOrders:
+SELECT * FROM cached_order WHERE restaurant_id = ? ORDER BY updated_at;
+
+upsertOrder:
+INSERT OR REPLACE INTO cached_order (id, restaurant_id, state, version, total_minor, updated_at)
+VALUES (?, ?, ?, ?, ?, ?);
+
+deleteOrder:
+DELETE FROM cached_order WHERE id = ?;
+
+insertOutbox:
+INSERT INTO local_outbox (id, mutation_type, order_id, payload, created_at)
+VALUES (?, ?, ?, ?, ?);
+
+selectOutbox:
+SELECT * FROM local_outbox ORDER BY seq;
+
+deleteOutbox:
+DELETE FROM local_outbox WHERE id = ?;

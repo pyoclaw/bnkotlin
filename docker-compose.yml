@@ -1,0 +1,20 @@
+# Local development PostgreSQL (docs/15-development.md).
+# Run: docker compose up -d postgres
+# The credentials below are development-only defaults; never use them outside
+# local development. Production runs on Freebuff-managed hosting with its own
+# secrets (see docs/22-deployment.md).
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: brodogfyld
+      POSTGRES_USER: brodogfyld
+      POSTGRES_PASSWORD: brodogfyld
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U brodogfyld"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

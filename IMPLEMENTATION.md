@@ -3,47 +3,49 @@
 Build in vertical slices rather than completing entire layers independently.
 
 ## Slice 1 — Foundation
-- [ ] Gradle multiplatform structure
-- [ ] Shared domain module
-- [ ] Design-system skeleton
-- [ ] Ktor server
-- [ ] PostgreSQL connection
-- [ ] CI build
+- [x] Gradle multiplatform structure
+- [x] Shared domain module
+- [x] Design-system skeleton (Compose desktop smoke app)
+- [x] Ktor server
+- [x] PostgreSQL connection (Flyway migrations + Exposed repository over HikariCP)
+- [x] CI build
 
 ## Slice 2 — Menu
-- [ ] Schema
-- [ ] API
-- [ ] Shared models
+- [x] Shared models
+- [x] Schema (migration tables for categories/products/modifiers)
+- [x] API (sample menu served from `/v1/menu`)
 - [ ] Customer menu UI
-- [ ] Tests
+- [x] Tests (pricing/validation unit tests)
 
 ## Slice 3 — Order
-- [ ] Cart
-- [ ] Order state machine
-- [ ] Persistence
-- [ ] API
+- [x] Cart (models + server-side pricing)
+- [x] Order state machine (central `OrderStateMachine` + tests)
+- [x] Persistence (Flyway migrations + Exposed repository with optimistic concurrency and transactional outbox; integration-tested in CI against PostgreSQL)
+- [x] API (order creation, submit, fake pay, status, timeline, kitchen actions)
 - [ ] Checkout UI
 
 ## Slice 4 — Payment
-- [ ] PaymentProvider interface
-- [ ] Provider adapter
+- [x] PaymentProvider interface
+- [x] Fake/test provider (dev only)
+- [ ] Provider adapter (real provider)
 - [ ] Signed webhook
 - [ ] Idempotency
 - [ ] Payment tests
 
 ## Slice 5 — Kitchen
-- [ ] Kitchen API
+- [x] Kitchen API (accept/reject/delay/ready/complete endpoints)
 - [ ] Kitchen UI
-- [ ] Realtime stream
-- [ ] State actions
-- [ ] Audit timeline
+- [x] Realtime stream (order events broadcast over `/v1/ws/orders`, restaurant-scoped)
+- [x] State actions (via shared state machine)
+- [x] Audit timeline (timeline events on every transition)
 
 ## Slice 6 — Offline
-- [ ] Local cache
-- [ ] Outbox
-- [ ] Reconnect
-- [ ] Event recovery
-- [ ] Conflict tests
+- [x] Local cache + client outbox schema (SQLDelight/SQLite in `shared:sync`)
+- [x] Offline mutation replay (reconnect + idempotent retry, FIFO via `local_outbox.seq`)
+- [x] Event recovery (dedupe by version, gap-triggered resync, full kitchen recovery)
+- [x] Conflict tests (stale drop + reconcile, superseded mutations, idempotent retry)
+- [x] Server idempotency (mutation id doubles as the timeline event id; replayed mutations are no-ops)
+- [x] Real Ktor HTTP transport in `shared:networking` (`KtorSyncTransport` implements `SyncTransport`; WebSocket event ingestion lands with the kitchen UI)
 
 ## Slice 7 — Notifications / Printing
 - [ ] Push

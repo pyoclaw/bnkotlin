@@ -21,10 +21,29 @@ dependencies {
     implementation(libs.ktor.serialization.kotlinx.json)
     implementation(libs.ktor.server.websockets)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.kotlinx.datetime)
     implementation(libs.logback.classic)
+    implementation(libs.postgresql)
+    implementation(libs.hikaricp)
+    implementation(libs.flyway.core)
+    implementation(libs.flyway.database.postgresql)
+    implementation(libs.exposed.core)
+    implementation(libs.exposed.jdbc)
+    implementation(libs.exposed.java.time)
+    implementation(libs.exposed.json)
 
     testImplementation(libs.ktor.server.test.host)
     testImplementation(libs.ktor.client.content.negotiation)
     testImplementation(libs.ktor.client.websockets)
+    testImplementation(libs.kotlinx.coroutines.core)
     testImplementation(kotlin("test"))
+}
+
+// Expose the canonical migrations in database/migrations on the classpath at
+// Flyway's default location (classpath:db/migration).
+tasks.processResources {
+    from(rootProject.file("database/migrations")) {
+        into("db/migration")
+    }
 }

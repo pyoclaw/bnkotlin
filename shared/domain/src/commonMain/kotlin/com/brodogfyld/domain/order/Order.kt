@@ -47,5 +47,6 @@ data class Order(
     val currency: Currency = Currency.DKK,
     val state: OrderState = OrderState.DRAFT,
     val customerId: String? = null,
+    val version: Long = 0L,
     val timeline: List<OrderTimelineEvent> = emptyList(),
 )

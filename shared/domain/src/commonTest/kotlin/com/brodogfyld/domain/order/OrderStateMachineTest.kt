@@ -31,6 +31,7 @@ class OrderStateMachineTest {
 
         assertEquals(OrderState.ACCEPTED, order.state)
         assertEquals(4, order.timeline.size)
+        assertEquals(4L, order.version)
         assertEquals("e4", order.timeline.last().eventId)
         assertEquals(OrderState.QUEUED, order.timeline.last().previousState)
         assertEquals(OrderActorType.KITCHEN, order.timeline.last().actorType)
